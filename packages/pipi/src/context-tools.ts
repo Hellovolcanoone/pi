@@ -3,7 +3,7 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { SessionContextStore } from "./context-store.ts";
 
 const setContextSchema = Type.Object({
-	scope: Type.Optional(Type.Literal("session", { description: "Only session scope is supported in the role-agent MVP" })),
+	scope: Type.Optional(Type.Literal("session", { description: "Only session scope is supported in the pipi MVP" })),
 	key: Type.String({ description: "Stable context key. Setting an existing key overwrites its content." }),
 	content: Type.String({ description: "Context content to inject into every prompt for this session." }),
 });
@@ -11,14 +11,14 @@ const setContextSchema = Type.Object({
 type SetContextParams = Static<typeof setContextSchema>;
 
 const unsetContextSchema = Type.Object({
-	scope: Type.Optional(Type.Literal("session", { description: "Only session scope is supported in the role-agent MVP" })),
+	scope: Type.Optional(Type.Literal("session", { description: "Only session scope is supported in the pipi MVP" })),
 	key: Type.String({ description: "Context key to remove." }),
 });
 
 type UnsetContextParams = Static<typeof unsetContextSchema>;
 
 const listContextSchema = Type.Object({
-	scope: Type.Optional(Type.Literal("session", { description: "Only session scope is supported in the role-agent MVP" })),
+	scope: Type.Optional(Type.Literal("session", { description: "Only session scope is supported in the pipi MVP" })),
 });
 
 type ListContextParams = Static<typeof listContextSchema>;
@@ -33,7 +33,7 @@ function textResult(text: string, details: ContextToolDetails): ContextToolResul
 
 function ensureSessionScope(scope: "session" | undefined): void {
 	if (scope !== undefined && scope !== "session") {
-		throw new Error("role-agent MVP only supports session context scope");
+		throw new Error("pipi MVP only supports session context scope");
 	}
 }
 

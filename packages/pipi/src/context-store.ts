@@ -44,7 +44,7 @@ const DEFAULT_CONTEXT_LIMITS: ContextLimits = {
 
 function normalizeScope(scope: ContextScope | undefined): ContextScope {
 	if (scope === undefined || scope === "session") return "session";
-	throw new Error("role-agent MVP only supports session context scope");
+	throw new Error("pipi MVP only supports session context scope");
 }
 
 function normalizeKey(key: string, maxKeyChars: number): string {
@@ -126,6 +126,11 @@ export class SessionContextStore {
 
 	get(key: string): ContextItem | undefined {
 		return this.items.get(normalizeKey(key, this.limits.maxKeyChars));
+	}
+
+	replace(items: ContextItem[]): void {
+		this.items.clear();
+		for (const item of items) this.set(item);
 	}
 
 	clear(): void {

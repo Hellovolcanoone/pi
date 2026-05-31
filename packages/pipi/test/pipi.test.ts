@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider, type UserMessage } from "@earendil-works/pi-ai";
@@ -11,9 +11,11 @@ import {
 	readLlmboxCachedToken,
 	resolveLlmboxApiKey,
 	resolveLlmboxDefaultModel,
-	RoleAgentRuntime,
+	PipiRuntime,
 	SessionContextStore,
+	createWorkspaceTools,
 } from "../src/index.ts";
+import { appendLines, removePendingLine } from "../src/tui-mode.ts";
 
 const registrations: Array<{ unregister(): void }> = [];
 
@@ -23,7 +25,51 @@ afterEach(() => {
 	}
 });
 
-describe("RoleAgentRuntime", () => {
+describe("PipiRuntime", () => {
+	it("creates workspace tools with read and command execution", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pipi-tools-"));
+		try {
+			writeFileSync(join(dir, "sample.txt"), "hello tools");
+			const tools = createWorkspaceTools({ root: dir, mode: "workspace" });
+			const read = tools.find((tool) => tool.name === "read_file")!;
+			const run = tools.find((tool) => tool.name === "run_command")!;
+			const write = tools.find((tool) => tool.name === "write_file")!;
+
+			await expect(read.execute("read", { path: "sample.txt" })).resolves.toMatchObject({
+				content: [{ type: "text", text: "hello tools" }],
+			});
+			await expect(run.execute("run", { command: "pwd", args: [] })).resolves.toMatchObject({
+				details: { action: "run", command: "pwd" },
+			});
+			await expect(run.execute("danger", { command: "rm", args: ["-rf", "."] })).rejects.toThrow("Blocked dangerous command");
+			await expect(run.execute("touch", { command: "touch", args: ["x.txt"] })).resolves.toMatchObject({
+				details: { requiresConfirmation: true },
+			});
+			await expect(run.execute("bash", { command: "bash", args: ["-lc", "touch bypass.txt"] })).resolves.toMatchObject({
+				details: { requiresConfirmation: true },
+			});
+			expect(existsSync(join(dir, "bypass.txt"))).toBe(false);
+			await expect(write.execute("write", { path: "out.txt", content: "x", confirm: true })).resolves.toMatchObject({
+				details: { requiresConfirmation: true },
+			});
+			expect(existsSync(join(dir, "out.txt"))).toBe(false);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("splits TUI output into render lines", () => {
+		const lines: string[] = [];
+		appendLines(lines, "one\ntwo\n");
+		expect(lines).toEqual(["one", "two", " "]);
+	});
+
+	it("removes pending TUI line", () => {
+		const lines = ["before", "Thinking...", "after"];
+		removePendingLine(lines, 1);
+		expect(lines).toEqual(["before", "after"]);
+	});
+
 	it("injects ROLE.md and session context into every prompt", async () => {
 		const registration = registerFauxProvider();
 		registrations.push(registration);
@@ -38,10 +84,10 @@ describe("RoleAgentRuntime", () => {
 				return fauxAssistantMessage("second");
 			},
 		]);
-		const runtime = new RoleAgentRuntime({
+		const runtime = new PipiRuntime({
 			role: "Always answer in haiku form.",
 			model: registration.getModel(),
-			baseSystemPrompt: "You are role-agent.",
+			baseSystemPrompt: "You are pipi.",
 		});
 		const session = await runtime.createSession("alpha");
 
@@ -70,7 +116,7 @@ describe("RoleAgentRuntime", () => {
 				return fauxAssistantMessage("two");
 			},
 		]);
-		const runtime = new RoleAgentRuntime({ role: "You remember the role file.", model: registration.getModel() });
+		const runtime = new PipiRuntime({ role: "You remember the role file.", model: registration.getModel() });
 		const first = await runtime.createSession("first");
 		const second = await runtime.createSession("second");
 
@@ -85,7 +131,7 @@ describe("RoleAgentRuntime", () => {
 	});
 
 	it("supports set/list/unset context tools with overwrite semantics", async () => {
-		const runtime = new RoleAgentRuntime({
+		const runtime = new PipiRuntime({
 			role: "Role text.",
 			model: registerAndTrack().getModel(),
 			contextStoreOptions: { now: () => "2026-05-30T00:00:00.000Z" },
@@ -105,7 +151,7 @@ describe("RoleAgentRuntime", () => {
 	});
 
 	it("enforces hard limits for session context", async () => {
-		const runtime = new RoleAgentRuntime({
+		const runtime = new PipiRuntime({
 			role: "Role text.",
 			model: registerAndTrack().getModel(),
 			contextStoreOptions: { limits: { maxKeyChars: 10, maxChars: 5, maxTotalChars: 40, maxItems: 3 } },
@@ -129,22 +175,54 @@ describe("RoleAgentRuntime", () => {
 		]);
 	});
 
-	it("rejects duplicate session ids", async () => {
-		const runtime = new RoleAgentRuntime({ role: "Role text.", model: registerAndTrack().getModel() });
+	it("rejects duplicate in-process session ids", async () => {
+		const runtime = new PipiRuntime({ role: "Role text.", model: registerAndTrack().getModel() });
 
 		await runtime.createSession("duplicate");
 		await expect(runtime.createSession("duplicate")).rejects.toThrow("already exists");
 	});
 
+	it("creates unique generated session ids across runtime instances", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pipi-sessions-"));
+		try {
+			const first = new PipiRuntime({ role: "Role text.", model: registerAndTrack().getModel(), sessionsRoot: dir });
+			const second = new PipiRuntime({ role: "Role text.", model: registerAndTrack().getModel(), sessionsRoot: dir });
+			const a = await first.createSession();
+			const b = await second.createSession();
+
+			expect(a.sessionId).not.toBe(b.sessionId);
+			expect(await first.listSessions()).toHaveLength(2);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("resumes explicit persistent sessions instead of creating duplicates", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pipi-resume-"));
+		try {
+			const first = new PipiRuntime({ role: "Role text.", model: registerAndTrack().getModel(), sessionsRoot: dir });
+			const created = await first.createSession("same");
+			created.setContext({ key: "scene", content: "first" });
+
+			const second = new PipiRuntime({ role: "Role text.", model: registerAndTrack().getModel(), sessionsRoot: dir });
+			const resumed = await second.resumeSession("same");
+
+			expect(resumed.sessionId).toBe("same");
+			expect(await second.listSessions()).toHaveLength(1);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("creates llmbox model and auth config from env/cache", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "role-agent-llmbox-"));
+		const dir = mkdtempSync(join(tmpdir(), "pipi-llmbox-"));
 		try {
 			const defaultsPath = join(dir, "default-models.json");
 			const tokenPath = join(dir, "accesstoken");
-			writeFileSync(defaultsPath, JSON.stringify({ "role-agent": "gpt-5.5[1m]" }));
+			writeFileSync(defaultsPath, JSON.stringify({ pipi: "gpt-5.5[1m]" }));
 			writeFileSync(tokenPath, `${Math.floor(Date.now() / 1000)}\nraw-token\n`);
 
-			const modelId = resolveLlmboxDefaultModel("role-agent", defaultsPath);
+			const modelId = resolveLlmboxDefaultModel("pipi", defaultsPath);
 			const model = createLlmboxModel({ modelId, projectRoot: "/repo", repoInfo: { branch: "main" } });
 			expect(model.id).toBe("gpt-5.5");
 			expect(model.name).toBe("gpt-5.5[1m]");
@@ -170,16 +248,57 @@ describe("RoleAgentRuntime", () => {
 				headers: { "x-source": "caijing-pay-aicoding", "x-extra": "1" },
 			});
 			expect(createLlmboxHeaders({ source: "custom" })).toEqual({ "x-source": "custom" });
-			expect(() => resolveLlmboxDefaultModel("role-agent", join(dir, "missing.json"))).toThrow(
-				"Run llmbox switch role-agent first",
+			expect(() => resolveLlmboxDefaultModel("pipi", join(dir, "missing.json"))).toThrow(
+				"Run llmbox switch pipi first",
 			);
 			writeFileSync(defaultsPath, "not json");
-			expect(() => resolveLlmboxDefaultModel("role-agent", defaultsPath)).toThrow(
-				"Run llmbox switch role-agent first",
+			expect(() => resolveLlmboxDefaultModel("pipi", defaultsPath)).toThrow(
+				"Run llmbox switch pipi first",
 			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+
+	it("injects no-skills disclosure", async () => {
+		const registration = registerFauxProvider();
+		registrations.push(registration);
+		let systemPrompt = "";
+		registration.setResponses([
+			(context) => {
+				systemPrompt = context.systemPrompt ?? "";
+				return fauxAssistantMessage("ok");
+			},
+		]);
+		const runtime = new PipiRuntime({ role: "Role text.", model: registration.getModel() });
+
+		await (await runtime.createSession("no-skills")).prompt("hello");
+
+		expect(systemPrompt).toContain("No skills are currently loaded");
+	});
+
+	it("injects instruction-only skills", async () => {
+		const registration = registerFauxProvider();
+		registrations.push(registration);
+		let systemPrompt = "";
+		registration.setResponses([
+			(context) => {
+				systemPrompt = context.systemPrompt ?? "";
+				return fauxAssistantMessage("ok");
+			},
+		]);
+		const runtime = new PipiRuntime({
+			role: "Role text.",
+			model: registration.getModel(),
+			skills: [{ name: "project-mgr", description: "Manage delivery", content: "Track risks.", filePath: "/tmp/SKILL.md" }],
+		});
+
+		await (await runtime.createSession("skills")).prompt("hello");
+
+		expect(systemPrompt).toContain("# Enabled Skills");
+		expect(systemPrompt).toContain("## project-mgr");
+		expect(systemPrompt).toContain("instruction-only skills");
+		expect(systemPrompt).toContain("Track risks.");
 	});
 
 	it("manual compaction does not include ROLE.md or session context in compaction input", async () => {
@@ -193,7 +312,7 @@ describe("RoleAgentRuntime", () => {
 				return fauxAssistantMessage("after compact");
 			},
 		]);
-		const runtime = new RoleAgentRuntime({
+		const runtime = new PipiRuntime({
 			role: "Never mention the silver lantern rule.",
 			model: registration.getModel(),
 			getApiKeyAndHeaders: async () => ({ apiKey: "test" }),

@@ -1,12 +1,12 @@
 {
-	"name": "@earendil-works/pi-role-agent",
+	"name": "@earendil-works/pi-pipi",
 	"version": "0.78.0",
-	"description": "Lightweight role-playing agent runtime built on pi-agent-core",
+	"description": "Lightweight Pipi role-playing agent runtime built on pi-agent-core",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"bin": {
-		"role-agent": "./dist/cli.js"
+		"pipi": "./dist/cli.js"
 	},
 	"exports": {
 		".": {
@@ -27,6 +27,7 @@
 	"dependencies": {
 		"@earendil-works/pi-agent-core": "^0.78.0",
 		"@earendil-works/pi-ai": "^0.78.0",
+		"@earendil-works/pi-tui": "^0.78.0",
 		"typebox": "1.1.38"
 	},
 	"keywords": [
@@ -40,7 +41,7 @@
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/earendil-works/pi.git",
-		"directory": "packages/role-agent"
+		"directory": "packages/pipi"
 	},
 	"engines": {
 		"node": ">=22.19.0"

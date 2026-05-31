@@ -89,7 +89,7 @@ export function resolveLlmboxApiKey(options: LlmboxAuthOptions = {}): string {
 	return raw.startsWith("at-") ? raw : `at-${raw}`;
 }
 
-export function resolveLlmboxDefaultModel(agent = "role-agent", path = LLMBOX_DEFAULT_MODEL_PATH): string {
+export function resolveLlmboxDefaultModel(agent = "pipi", path = LLMBOX_DEFAULT_MODEL_PATH): string {
 	try {
 		const raw = readFileSync(path, "utf8");
 		const defaults = JSON.parse(raw) as Record<string, unknown>;

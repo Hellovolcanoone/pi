@@ -1,4 +1,4 @@
-import type { ResponseOutputMessage } from "openai/resources/responses/responses.js";
+import type { ResponseOutputMessage, ResponseReasoningItem } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
 import { getModel } from "../src/models.ts";
 import { convertResponsesMessages } from "../src/providers/openai-responses-shared.ts";
@@ -44,5 +44,69 @@ describe("OpenAI Responses message ID conversion", () => {
 
 		expect(messageIds).toEqual(["msg_pi_1", "msg_pi_1_1"]);
 		expect(new Set(messageIds).size).toBe(messageIds.length);
+	});
+
+	it("does not replay non-encrypted reasoning items for store=false requests", () => {
+		const model = getModel("openai", "gpt-5-mini");
+		const assistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: "",
+					thinkingSignature: JSON.stringify({ id: "rs_missing", type: "reasoning", summary: [] }),
+				},
+				{ type: "text", text: "visible answer" },
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage,
+			stopReason: "stop",
+			timestamp: Date.now() - 1000,
+		};
+		const context: Context = {
+			systemPrompt: "You are concise.",
+			messages: [{ role: "user", content: "hello", timestamp: Date.now() - 2000 }, assistant],
+		};
+
+		const input = convertResponsesMessages(model, context, new Set(["openai", "openai-codex", "opencode"]));
+		expect(input.some((item) => item.type === "reasoning" && item.id === "rs_missing")).toBe(false);
+	});
+
+	it("replays encrypted reasoning items", () => {
+		const model = getModel("openai", "gpt-5-mini");
+		const assistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: "",
+					thinkingSignature: JSON.stringify({
+						id: "rs_encrypted",
+						type: "reasoning",
+						summary: [],
+						encrypted_content: "encrypted",
+					}),
+				},
+				{ type: "text", text: "visible answer" },
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage,
+			stopReason: "stop",
+			timestamp: Date.now() - 1000,
+		};
+		const context: Context = {
+			systemPrompt: "You are concise.",
+			messages: [{ role: "user", content: "hello", timestamp: Date.now() - 2000 }, assistant],
+		};
+
+		const input = convertResponsesMessages(model, context, new Set(["openai", "openai-codex", "opencode"]));
+		const reasoning = input.find(
+			(item): item is ResponseReasoningItem => item.type === "reasoning" && item.id === "rs_encrypted",
+		);
+		expect(reasoning?.encrypted_content).toBe("encrypted");
 	});
 });

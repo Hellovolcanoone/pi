@@ -172,7 +172,7 @@ export function convertResponsesMessages<TApi extends Api>(
 				if (block.type === "thinking") {
 					if (block.thinkingSignature) {
 						const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
-						output.push(reasoningItem);
+						if (reasoningItem.encrypted_content) output.push(reasoningItem);
 					}
 				} else if (block.type === "text") {
 					const textBlock = block as TextContent;

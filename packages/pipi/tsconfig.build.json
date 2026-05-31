@@ -7,7 +7,9 @@
 			"@earendil-works/pi-agent-core/node": ["../agent/dist/node.d.ts"],
 			"@earendil-works/pi-agent-core/*": ["../agent/dist/*.d.ts", "../agent/dist/harness/*.d.ts"],
 			"@earendil-works/pi-ai": ["../ai/dist/index.d.ts"],
-			"@earendil-works/pi-ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"]
+			"@earendil-works/pi-ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"],
+			"@earendil-works/pi-tui": ["../tui/dist/index.d.ts"],
+			"@earendil-works/pi-tui/*": ["../tui/dist/*.d.ts"]
 		},
 		"rootDir": "./src"
 	},

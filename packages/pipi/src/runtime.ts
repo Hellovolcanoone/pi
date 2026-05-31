@@ -2,6 +2,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import {
 	AgentHarness,
 	InMemorySessionRepo,
+	JsonlSessionRepo,
 	NodeExecutionEnv,
 	Session,
 	type AgentHarnessOptions,
@@ -14,13 +15,18 @@ import { SessionContextStore, type ContextItem, type SessionContextStoreOptions 
 import { createContextTools } from "./context-tools.ts";
 import { buildRoleSystemPrompt } from "./prompt-builder.ts";
 import { type RoleDefinition, type RoleLoader, StaticRoleLoader } from "./role-loader.ts";
+import type { PipiSkill } from "./skills.ts";
+import type { ToolMode } from "./workspace-tools.ts";
 
-export interface RoleAgentRuntimeOptions {
+export interface PipiRuntimeOptions {
 	role: RoleLoader | string;
 	model: Model<any>;
 	cwd?: string;
+	sessionsRoot?: string;
 	baseSystemPrompt?: string;
 	contextStoreOptions?: SessionContextStoreOptions;
+	skills?: PipiSkill[];
+	toolMode?: ToolMode;
 	tools?: AgentTool[];
 	activeToolNames?: string[];
 	streamOptions?: AgentHarnessStreamOptions;
@@ -30,11 +36,12 @@ export interface RoleAgentRuntimeOptions {
 	followUpMode?: QueueMode;
 }
 
-export interface RoleSessionRuntime {
+export interface PipiSessionRuntime {
 	sessionId: string;
 	session: Session;
 	contextStore: SessionContextStore;
 	harness: AgentHarness;
+	getContext(): Promise<ContextItem[]>;
 	prompt(text: string): ReturnType<AgentHarness["prompt"]>;
 	compact(customInstructions?: string): ReturnType<AgentHarness["compact"]>;
 	setContext(options: { key: string; content: string; source?: string; updatedBy?: string }): ContextItem;
@@ -43,25 +50,66 @@ export interface RoleSessionRuntime {
 	buildSystemPrompt(): Promise<string>;
 }
 
-export class RoleAgentRuntime {
+export class PipiRuntime {
 	private readonly roleLoader: RoleLoader;
-	private readonly options: Omit<RoleAgentRuntimeOptions, "role">;
+	private readonly options: Omit<PipiRuntimeOptions, "role">;
 	private readonly sessionIds = new Set<string>();
-	private nextSessionNumber = 0;
 
-	constructor(options: RoleAgentRuntimeOptions) {
+	constructor(options: PipiRuntimeOptions) {
 		this.roleLoader = typeof options.role === "string" ? new StaticRoleLoader(options.role) : options.role;
 		this.options = options;
 	}
 
-	async createSession(sessionId = this.createSessionId()): Promise<RoleSessionRuntime> {
+	async createSession(sessionId?: string): Promise<PipiSessionRuntime> {
+		const env = new NodeExecutionEnv({ cwd: this.options.cwd ?? process.cwd() });
+		if (sessionId) this.claimSessionId(sessionId);
+		const repo = this.options.sessionsRoot
+			? new JsonlSessionRepo({ fs: env, sessionsRoot: this.options.sessionsRoot })
+			: undefined;
+		if (sessionId && repo) {
+			const existing = await repo.list({ cwd: env.cwd });
+			if (existing.some((session) => session.id === sessionId)) {
+				throw new Error(`pipi session already exists: ${sessionId}`);
+			}
+		}
+		const session = repo
+			? await repo.create({
+					...(sessionId ? { id: sessionId } : {}),
+					cwd: env.cwd,
+				})
+			: await new InMemorySessionRepo().create(sessionId ? { id: sessionId } : {});
+		const metadata = await session.getMetadata();
+		if (!sessionId) this.claimSessionId(metadata.id);
+		return this.createSessionRuntime(metadata.id, session, env);
+	}
+
+	async resumeSession(sessionId: string): Promise<PipiSessionRuntime> {
+		if (!this.options.sessionsRoot) throw new Error("resumeSession requires sessionsRoot");
+		this.claimSessionId(sessionId);
+		const env = new NodeExecutionEnv({ cwd: this.options.cwd ?? process.cwd() });
+		const repo = new JsonlSessionRepo({ fs: env, sessionsRoot: this.options.sessionsRoot });
+		const sessions = await repo.list({ cwd: env.cwd });
+		const metadata = sessions.find((session) => session.id === sessionId);
+		if (!metadata) throw new Error(`pipi session not found: ${sessionId}`);
+		return this.createSessionRuntime(sessionId, await repo.open(metadata), env);
+	}
+
+	async listSessions(): Promise<Array<{ id: string; createdAt: string; path: string }>> {
+		if (!this.options.sessionsRoot) return [];
+		const env = new NodeExecutionEnv({ cwd: this.options.cwd ?? process.cwd() });
+		const sessions = await new JsonlSessionRepo({ fs: env, sessionsRoot: this.options.sessionsRoot }).list({ cwd: env.cwd });
+		return sessions.map((session) => ({ id: session.id, createdAt: session.createdAt, path: session.path }));
+	}
+
+	private claimSessionId(sessionId: string): void {
 		if (this.sessionIds.has(sessionId)) {
-			throw new Error(`Role agent session already exists: ${sessionId}`);
+			throw new Error(`pipi session already exists: ${sessionId}`);
 		}
 		this.sessionIds.add(sessionId);
+	}
+
+	private createSessionRuntime(sessionId: string, session: Session, env: NodeExecutionEnv): PipiSessionRuntime {
 		const contextStore = new SessionContextStore(this.options.contextStoreOptions);
-		const session = await new InMemorySessionRepo().create({ id: sessionId });
-		const env = new NodeExecutionEnv({ cwd: this.options.cwd ?? process.cwd() });
 		const tools = [...createContextTools(contextStore), ...(this.options.tools ?? [])];
 		const harness = new AgentHarness({
 			env,
@@ -76,7 +124,7 @@ export class RoleAgentRuntime {
 			followUpMode: this.options.followUpMode,
 			systemPrompt: async () => this.buildSystemPrompt(contextStore),
 		});
-		return new DefaultRoleSessionRuntime(sessionId, session, contextStore, harness, () => this.buildSystemPrompt(contextStore));
+		return new DefaultPipiSessionRuntime(sessionId, session, contextStore, harness, () => this.buildSystemPrompt(contextStore));
 	}
 
 	private async buildSystemPrompt(contextStore: SessionContextStore): Promise<string> {
@@ -85,16 +133,14 @@ export class RoleAgentRuntime {
 			baseSystemPrompt: this.options.baseSystemPrompt,
 			role,
 			sessionContext: contextStore.list(),
+			skills: this.options.skills ?? [],
+			toolMode: this.options.toolMode ?? "workspace",
 		});
 	}
 
-	private createSessionId(): string {
-		this.nextSessionNumber += 1;
-		return `role-session-${this.nextSessionNumber}`;
-	}
 }
 
-class DefaultRoleSessionRuntime implements RoleSessionRuntime {
+class DefaultPipiSessionRuntime implements PipiSessionRuntime {
 	readonly sessionId: string;
 	readonly session: Session;
 	readonly contextStore: SessionContextStore;
@@ -113,6 +159,10 @@ class DefaultRoleSessionRuntime implements RoleSessionRuntime {
 		this.contextStore = contextStore;
 		this.harness = harness;
 		this.promptBuilder = promptBuilder;
+	}
+
+	async getContext(): Promise<ContextItem[]> {
+		return this.contextStore.list();
 	}
 
 	prompt(text: string): ReturnType<AgentHarness["prompt"]> {
