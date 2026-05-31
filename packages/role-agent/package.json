@@ -5,6 +5,9 @@
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
+	"bin": {
+		"role-agent": "./dist/cli.js"
+	},
 	"exports": {
 		".": {
 			"types": "./dist/index.d.ts",
@@ -17,7 +20,7 @@
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
-		"build": "tsgo -p tsconfig.build.json",
+		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js",
 		"test": "vitest --run",
 		"prepublishOnly": "npm run clean && npm run build"
 	},
