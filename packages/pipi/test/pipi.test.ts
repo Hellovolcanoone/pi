@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider, type UserMessage } from "@earendil-works/pi-ai";
 import type { SessionBeforeCompactResult } from "@earendil-works/pi-agent-core";
+import { Input, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	createLlmboxGetApiKeyAndHeaders,
@@ -15,7 +16,7 @@ import {
 	SessionContextStore,
 	createWorkspaceTools,
 } from "../src/index.ts";
-import { appendLines, removePendingLine } from "../src/tui-mode.ts";
+import { appendLines, removePendingLine, renderPipiInputLines } from "../src/tui-mode.ts";
 
 const registrations: Array<{ unregister(): void }> = [];
 
@@ -68,6 +69,16 @@ describe("PipiRuntime", () => {
 		const lines = ["before", "Thinking...", "after"];
 		removePendingLine(lines, 1);
 		expect(lines).toEqual(["before", "after"]);
+	});
+
+	it("keeps TUI input lines within render width after prompt replacement", () => {
+		const input = new Input();
+		input.setValue("x".repeat(500));
+		const lines = renderPipiInputLines(input, 255);
+		expect(lines.length).toBeGreaterThan(0);
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(255);
+		}
 	});
 
 	it("injects ROLE.md and session context into every prompt", async () => {

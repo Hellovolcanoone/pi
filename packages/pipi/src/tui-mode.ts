@@ -1,4 +1,4 @@
-import { Input, matchesKey, ProcessTerminal, TUI, type Component } from "@earendil-works/pi-tui";
+import { Input, matchesKey, ProcessTerminal, TUI, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import type { PipiRuntime } from "./runtime.ts";
 import type { PipiSkill } from "./skills.ts";
 import type { ToolMode } from "./workspace-tools.ts";
@@ -52,17 +52,18 @@ class PipiTuiView implements Component {
 	}
 
 	render(width: number): string[] {
-		const inputLines = this.pending ? ["pipi › Waiting for response..."] : this.input.render(width).map((line) => line.replace(/^> /, "pipi › "));
+		const renderWidth = Math.max(1, width);
+		const inputLines = this.pending ? [fitLine("pipi › Waiting for response...", renderWidth)] : renderPipiInputLines(this.input, renderWidth);
 		const reserved = 2 + inputLines.length;
 		const historyRows = Math.max(1, process.stdout.rows - reserved);
 		const start = Math.max(0, this.lines.length - historyRows - this.scrollOffset);
 		const visible = this.lines.slice(start, start + historyRows);
 		const scroll = this.scrollOffset > 0 ? ` | scroll ${this.scrollOffset}/${this.maxScroll(historyRows)}` : "";
-		const separator = "─".repeat(Math.max(1, width));
+		const separator = fitLine("─".repeat(renderWidth), renderWidth);
 		return [
-			...visible.map((line) => line.slice(0, Math.max(1, width))),
+			...visible.map((line) => fitLine(line, renderWidth)),
 			separator,
-			`${this.status}${scroll}`.slice(0, Math.max(1, width)),
+			fitLine(`${this.status}${scroll}`, renderWidth),
 			...inputLines,
 		];
 	}
@@ -72,6 +73,17 @@ class PipiTuiView implements Component {
 	}
 
 	invalidate(): void {}
+}
+
+function fitLine(line: string, width: number): string {
+	return truncateToWidth(line, Math.max(1, width), "");
+}
+
+export function renderPipiInputLines(input: Input, width: number): string[] {
+	const prompt = "pipi › ";
+	const defaultPromptWidth = 2;
+	const inputWidth = Math.max(1, width - visibleWidth(prompt) + defaultPromptWidth);
+	return input.render(inputWidth).map((line) => fitLine(line.replace(/^> /, prompt), width));
 }
 
 export async function runPipiTui(options: PipiTuiOptions): Promise<void> {
